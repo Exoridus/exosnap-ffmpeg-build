@@ -285,17 +285,17 @@ jobs:
           # Build metadata
           TOOLCHAIN_VER=$(x86_64-w64-mingw32-gcc --version | head -1)
           CONFIGURE_CMD=$(cat /tmp/configure_cmd.txt)
-          cat > "${ARCHIVE_DIR}/BUILD-INFO.txt" << BUILDINFO
-FFmpeg upstream ref:  ${FFMPEG_REF}
-FFmpeg commit:        ${FFMPEG_COMMIT}
-Build date:           $(date -u +%Y-%m-%dT%H:%M:%SZ)
-Target:               x86_64-w64-mingw32 (Windows x86-64)
-Build host:           $(uname -srm)
-Toolchain:            ${TOOLCHAIN_VER}
-Configure command:    ${CONFIGURE_CMD}
-Build type:           LGPL-2.1+ shared, --disable-everything whitelist
-Produced by:          https://github.com/Exoridus/exosnap-ffmpeg-build
-BUILDINFO
+          {
+            printf 'FFmpeg upstream ref:  %s\n' "${FFMPEG_REF}"
+            printf 'FFmpeg commit:        %s\n' "${FFMPEG_COMMIT}"
+            printf 'Build date:           %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            printf 'Target:               x86_64-w64-mingw32 (Windows x86-64)\n'
+            printf 'Build host:           %s\n' "$(uname -srm)"
+            printf 'Toolchain:            %s\n' "${TOOLCHAIN_VER}"
+            printf 'Configure command:    %s\n' "${CONFIGURE_CMD}"
+            printf 'Build type:           LGPL-2.1+ shared, --disable-everything whitelist\n'
+            printf 'Produced by:          https://github.com/Exoridus/exosnap-ffmpeg-build\n'
+          } > "${ARCHIVE_DIR}/BUILD-INFO.txt"
 
           echo "--- Archive directory contents ---"
           find "${ARCHIVE_DIR}" -type f | sort
