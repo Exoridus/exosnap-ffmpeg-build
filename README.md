@@ -21,6 +21,7 @@ recorded inside the archive in `BUILD-INFO.txt` and in the release title.
 | Release tag | FFmpeg upstream ref | Notes |
 |-------------|---------------------|-------|
 | r1          | n8.1.1              | Initial controlled build; baseline parity with BtbN autobuild-2026-06-11 |
+| r2          | n8.1.1              | Adds `mp4` muxer; r1 omitted it so `avformat_alloc_output_context2("mp4", …)` returned AVERROR(EINVAL) |
 
 ## What is built
 
@@ -34,7 +35,8 @@ components ExoSnap links and uses:
 | `avutil` | utility | Required by avformat and avcodec |
 | `swresample` | resampler | Linked as dependency of avformat |
 | Demuxer: `matroska` | built-in to avformat | Input format for MKV remux |
-| Muxer: `mov` (MP4) | built-in to avformat | Output format for MP4 faststart |
+| Muxer: `mp4` | built-in to avformat | Output format for MP4 (required by `avformat_alloc_output_context2("mp4", …)`) |
+| Muxer: `mov` | built-in to avformat | Output format for MP4 faststart (shares movenc backend with mp4) |
 | Muxer: `matroska` | built-in to avformat | Output format for recovery MKV remux |
 | Protocol: `file` | built-in | Local file I/O |
 | Parser: `h264` | built-in | Stream parameter parsing |
