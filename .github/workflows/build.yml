@@ -225,11 +225,13 @@ jobs:
             fi
 
             echo "Generating ${LIB_OUT} from ${BASE}.dll"
+            # llvm-dlltool uses GNU-dlltool-compatible --machine strings.
+            # "i386:x86-64" is the standard BFD name for x86_64 Windows.
             "${DLLTOOL}" \
               --input-def "${DEF_FILE}" \
               --dllname "${BASE}.dll" \
               --output-lib "${LIB_OUT}" \
-              --machine x86_64
+              --machine i386:x86-64
             ls -la "${LIB_OUT}"
           done
 
