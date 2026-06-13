@@ -1,0 +1,372 @@
+name: Build FFmpeg
+
+# Trigger: manually via workflow_dispatch (choose any ffmpeg_ref),
+# or automatically on r* tag pushes (uses the default ref).
+on:
+  workflow_dispatch:
+    inputs:
+      ffmpeg_ref:
+        description: >
+          FFmpeg upstream git ref to build (branch, tag, or commit SHA).
+          Example: n8.1.1
+        required: false
+        default: "n8.1.1"
+  push:
+    tags:
+      - "r*"
+
+# ---------------------------------------------------------------------------
+# Derived values shared across steps
+# ---------------------------------------------------------------------------
+env:
+  # Canonical upstream ref: prefer the workflow_dispatch input; fall back to
+  # the default when triggered by a tag push.
+  FFMPEG_REF: ${{ github.event.inputs.ffmpeg_ref || 'n8.1.1' }}
+
+  # Cross-compilation prefix
+  CROSS_PREFIX: x86_64-w64-mingw32-
+
+  # Archive and directory names
+  ARCHIVE_STEM: ffmpeg-win64-lgpl-shared
+  # Installed prefix inside the build tree
+  INSTALL_PREFIX: /tmp/ffmpeg-install
+
+jobs:
+  build:
+    name: Build FFmpeg ${{ github.event.inputs.ffmpeg_ref || 'n8.1.1' }} (mingw-w64 cross)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to create releases
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Install cross toolchain and build tools
+      # -----------------------------------------------------------------------
+      - name: Install mingw-w64 cross toolchain and build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64 \
+            g++-mingw-w64-x86-64 \
+            binutils-mingw-w64-x86-64 \
+            llvm \
+            nasm \
+            yasm \
+            pkg-config \
+            make \
+            git \
+            zip \
+            unzip
+          echo "Toolchain versions:"
+          x86_64-w64-mingw32-gcc --version
+          nasm --version
+          llvm-dlltool --version 2>/dev/null || llvm-dlltool-14 --version 2>/dev/null || true
+
+      # -----------------------------------------------------------------------
+      # 2. Clone FFmpeg at the pinned ref (shallow)
+      # -----------------------------------------------------------------------
+      - name: Clone FFmpeg at ${{ env.FFMPEG_REF }}
+        run: |
+          git clone --depth=1 --branch "${FFMPEG_REF}" \
+            https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
+          cd ffmpeg-src
+          COMMIT=$(git rev-parse HEAD)
+          echo "FFMPEG_COMMIT=${COMMIT}" >> "$GITHUB_ENV"
+          echo "Cloned FFmpeg commit: ${COMMIT}"
+
+      # -----------------------------------------------------------------------
+      # 3. Configure — minimal LGPL shared, mux-only component whitelist
+      # -----------------------------------------------------------------------
+      - name: Configure FFmpeg
+        working-directory: ffmpeg-src
+        run: |
+          # Capture the full configure command for BUILD-INFO.txt
+          CONFIGURE_CMD=(
+            ./configure
+
+            # --- Cross compilation ---
+            --arch=x86_64
+            --target-os=mingw32
+            --cross-prefix=${CROSS_PREFIX}
+
+            # --- Build type: shared LGPL only, no static, no GPL, no nonfree ---
+            --enable-shared
+            --disable-static
+            # Note: --enable-gpl and --enable-nonfree are NOT set.
+
+            # --- Installation prefix ---
+            --prefix=${INSTALL_PREFIX}
+
+            # --- Disable everything first, then whitelist exactly what ExoSnap needs ---
+            --disable-everything
+
+            # Libraries: keep only the four ExoSnap links
+            --enable-avformat
+            --enable-avcodec
+            --enable-avutil
+            --enable-swresample
+            # avfilter, avdevice, swscale: NOT enabled
+
+            # Programs: none needed
+            --disable-programs
+            --disable-ffmpeg
+            --disable-ffplay
+            --disable-ffprobe
+
+            # Documentation: none needed
+            --disable-doc
+            --disable-htmlpages
+            --disable-manpages
+            --disable-podpages
+            --disable-txtpages
+
+            # --- Demuxers (input formats ExoSnap reads) ---
+            --enable-demuxer=matroska   # MKV/WebM input for remux
+
+            # --- Muxers (output formats ExoSnap writes) ---
+            --enable-muxer=mov          # MP4 output (mov covers mp4/m4a/3gp/etc.)
+            --enable-muxer=matroska     # MKV output (recovery remux)
+            --enable-muxer=webm         # WebM output (recovery remux fallback)
+
+            # --- Protocols ---
+            --enable-protocol=file      # Local file I/O
+
+            # --- Parsers (needed for avformat_find_stream_info to work correctly) ---
+            --enable-parser=h264
+            --enable-parser=hevc
+            --enable-parser=av1
+            --enable-parser=aac
+            --enable-parser=opus
+            --enable-parser=vorbis
+            --enable-parser=mpegaudio   # MP3 (defensive; MKV files may contain it)
+
+            # --- Bitstream filters (avformat uses these internally for MP4 output) ---
+            --enable-bsf=aac_adtstoasc        # AAC framing for MP4 containers
+            --enable-bsf=extract_extradata    # Codec extradata extraction
+            --enable-bsf=h264_mp4toannexb     # H.264 format conversion (avformat internal)
+            --enable-bsf=hevc_mp4toannexb     # HEVC format conversion (avformat internal)
+            --enable-bsf=av1_metadata         # AV1 metadata (defensive)
+            --enable-bsf=null                 # Required identity BSF
+
+            # --- No encoders or decoders (stream-copy only, no transcode) ---
+            # avcodec_parameters_copy() and codec_tag manipulation do not need
+            # any encoder or decoder to be registered.
+
+            # --- Windows-specific ---
+            --enable-w32threads
+            --disable-pthreads
+            --disable-os2threads
+
+            # --- Reduce binary size ---
+            --disable-debug
+            --disable-stripping
+            --enable-optimizations
+          )
+
+          # Print the configure command so it appears in the build log
+          echo "Running: ${CONFIGURE_CMD[*]}"
+          echo "CONFIGURE_CMD=${CONFIGURE_CMD[*]}" >> "$GITHUB_ENV"
+          "${CONFIGURE_CMD[@]}"
+
+      # -----------------------------------------------------------------------
+      # 4. Build
+      # -----------------------------------------------------------------------
+      - name: Build FFmpeg
+        working-directory: ffmpeg-src
+        run: |
+          make -j$(nproc)
+
+      # -----------------------------------------------------------------------
+      # 5. Install into staging prefix
+      # -----------------------------------------------------------------------
+      - name: Install FFmpeg into staging prefix
+        working-directory: ffmpeg-src
+        run: |
+          make install
+          echo "Installed files:"
+          find ${INSTALL_PREFIX} -type f | sort
+
+      # -----------------------------------------------------------------------
+      # 6. Generate MSVC-compatible import libraries with llvm-dlltool
+      #
+      # The mingw cross build produces libXXX.dll.a (GNU import libs). ExoSnap's
+      # CMake uses IMPORTED_IMPLIB pointing at MSVC-style XXX.lib files (as found
+      # in the BtbN archive). We generate those from the .def files that FFmpeg's
+      # build system produces alongside each shared library.
+      #
+      # If no .def files are produced (FFmpeg version dependent), fall back to
+      # generating them with gendef from the DLLs.
+      # -----------------------------------------------------------------------
+      - name: Generate MSVC import libs (llvm-dlltool)
+        run: |
+          BINDIR="${INSTALL_PREFIX}/bin"
+          LIBDIR="${INSTALL_PREFIX}/lib"
+
+          # Resolve llvm-dlltool — Ubuntu packages it with a version suffix
+          DLLTOOL=$(command -v llvm-dlltool 2>/dev/null || \
+                    ls /usr/bin/llvm-dlltool-* 2>/dev/null | sort -V | tail -1)
+          echo "Using dlltool: ${DLLTOOL}"
+
+          for DLL in "${BINDIR}"/*.dll; do
+            BASE=$(basename "${DLL}" .dll)
+            # Strip version suffix to get the lib name: avformat-62 -> avformat
+            LIBNAME=$(echo "${BASE}" | sed 's/-[0-9]*$//')
+            DEF_FILE="${LIBDIR}/${LIBNAME}.def"
+
+            # Generate .def from the DLL if the build didn't produce one
+            if [ ! -f "${DEF_FILE}" ]; then
+              echo "Generating ${DEF_FILE} from ${DLL}"
+              x86_64-w64-mingw32-objdump -p "${DLL}" | \
+                awk 'BEGIN{print "EXPORTS"} /^\s+[A-Za-z_]/{print $1}' \
+                > "${DEF_FILE}"
+              # Fallback: try gendef if available
+              if ! [ -s "${DEF_FILE}" ]; then
+                if command -v gendef &>/dev/null; then
+                  gendef - "${DLL}" > "${DEF_FILE}"
+                fi
+              fi
+            fi
+
+            LIB_OUT="${LIBDIR}/${LIBNAME}.lib"
+            echo "Generating ${LIB_OUT}"
+            "${DLLTOOL}" \
+              --input-def "${DEF_FILE}" \
+              --dllname "${BASE}.dll" \
+              --output-lib "${LIB_OUT}" \
+              --machine x86_64
+          done
+
+          echo "Generated import libs:"
+          ls -la "${LIBDIR}"/*.lib 2>/dev/null || echo "(none — check step output)"
+
+      # -----------------------------------------------------------------------
+      # 7. Assemble the archive in BtbN-compatible layout
+      # -----------------------------------------------------------------------
+      - name: Assemble release archive
+        run: |
+          STAGING="/tmp/ffmpeg-staging"
+          ARCHIVE_DIR="${STAGING}/ffmpeg-${FFMPEG_REF}-win64-lgpl-shared"
+          mkdir -p "${ARCHIVE_DIR}/bin" "${ARCHIVE_DIR}/include" "${ARCHIVE_DIR}/lib"
+
+          # DLLs (mux-only: avformat, avcodec, avutil, swresample)
+          for LIB in avformat avcodec avutil swresample; do
+            DLL=$(ls "${INSTALL_PREFIX}/bin/${LIB}"-*.dll 2>/dev/null | head -1)
+            if [ -n "${DLL}" ]; then
+              cp "${DLL}" "${ARCHIVE_DIR}/bin/"
+              echo "Copied DLL: $(basename ${DLL})"
+            else
+              echo "WARNING: DLL not found for ${LIB}" >&2
+            fi
+          done
+
+          # Import libs
+          for LIB in avformat avcodec avutil swresample; do
+            LIBFILE="${INSTALL_PREFIX}/lib/${LIB}.lib"
+            if [ -f "${LIBFILE}" ]; then
+              cp "${LIBFILE}" "${ARCHIVE_DIR}/lib/"
+            else
+              echo "WARNING: import lib not found: ${LIBFILE}" >&2
+            fi
+          done
+
+          # Headers (only the four ExoSnap-used libraries)
+          for INC in libavformat libavcodec libavutil libswresample; do
+            SRC="${INSTALL_PREFIX}/include/${INC}"
+            if [ -d "${SRC}" ]; then
+              cp -r "${SRC}" "${ARCHIVE_DIR}/include/"
+            fi
+          done
+
+          # FFmpeg license
+          cp ffmpeg-src/COPYING.LGPLv2.1 "${ARCHIVE_DIR}/LICENSE.md"
+
+          # Build info
+          TOOLCHAIN_VER=$(x86_64-w64-mingw32-gcc --version | head -1)
+          cat > "${ARCHIVE_DIR}/BUILD-INFO.txt" <<EOF
+          FFmpeg upstream ref:  ${FFMPEG_REF}
+          FFmpeg commit:        ${FFMPEG_COMMIT}
+          Build date:           $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          Target:               x86_64-w64-mingw32 (Windows x86-64)
+          Build host:           $(uname -a)
+          Toolchain:            ${TOOLCHAIN_VER}
+          Configure command:    ${CONFIGURE_CMD}
+          Build type:           LGPL-2.1+ shared, no GPL, no nonfree
+          Produced by:          https://github.com/Exoridus/exosnap-ffmpeg-build
+          EOF
+
+          # Create ZIP
+          ARCHIVE_NAME="${ARCHIVE_STEM}.zip"
+          cd "${STAGING}"
+          zip -r "/tmp/${ARCHIVE_NAME}" "ffmpeg-${FFMPEG_REF}-win64-lgpl-shared/"
+          echo "ARCHIVE_PATH=/tmp/${ARCHIVE_NAME}" >> "$GITHUB_ENV"
+          echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> "$GITHUB_ENV"
+          echo "Archive contents:"
+          unzip -l "/tmp/${ARCHIVE_NAME}"
+
+      # -----------------------------------------------------------------------
+      # 8. Compute SHA256
+      # -----------------------------------------------------------------------
+      - name: Compute SHA256
+        run: |
+          SHA256=$(sha256sum "${ARCHIVE_PATH}" | awk '{print $1}' | tr '[:lower:]' '[:upper:]')
+          echo "SHA256=${SHA256}" >> "$GITHUB_ENV"
+          echo "SHA256 of ${ARCHIVE_NAME}: ${SHA256}"
+          echo "${SHA256}  ${ARCHIVE_NAME}" > /tmp/SHA256SUMS.txt
+          echo "SUMS_PATH=/tmp/SHA256SUMS.txt" >> "$GITHUB_ENV"
+
+      # -----------------------------------------------------------------------
+      # 9. Upload archive as workflow artifact (always, for manual inspection)
+      # -----------------------------------------------------------------------
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE_STEM }}-${{ env.FFMPEG_REF }}
+          path: |
+            ${{ env.ARCHIVE_PATH }}
+            ${{ env.SUMS_PATH }}
+          retention-days: 30
+
+      # -----------------------------------------------------------------------
+      # 10. Create GitHub Release (only on r* tag pushes)
+      # -----------------------------------------------------------------------
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/r')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "FFmpeg ${{ env.FFMPEG_REF }} (${{ github.ref_name }})"
+          body: |
+            ## FFmpeg ${{ env.FFMPEG_REF }} — minimal LGPL shared build for ExoSnap
+
+            **Upstream commit:** `${{ env.FFMPEG_COMMIT }}`
+            **Build type:** LGPL-2.1+ shared (no GPL, no nonfree)
+            **Target:** Windows x86-64 (mingw-w64 cross build)
+
+            ### Components included
+            Libraries: avformat, avcodec, avutil, swresample
+            Demuxers: matroska (MKV/WebM input)
+            Muxers: mov (MP4), matroska (MKV), webm
+            Protocols: file
+            Parsers: h264, hevc, av1, aac, opus, vorbis, mpegaudio
+            BSFs: aac_adtstoasc, extract_extradata, h264_mp4toannexb, hevc_mp4toannexb, av1_metadata, null
+
+            ### SHA256
+            ```
+            ${{ env.SHA256 }}  ${{ env.ARCHIVE_NAME }}
+            ```
+
+            ### ExoSnap CMake update
+            In `cmake/VendorFFmpeg.cmake`, replace the `FetchContent_Declare` URL and hash:
+            ```cmake
+            URL      "https://github.com/Exoridus/exosnap-ffmpeg-build/releases/download/${{ github.ref_name }}/${{ env.ARCHIVE_NAME }}"
+            URL_HASH "SHA256=${{ env.SHA256 }}"
+            ```
+
+            ### LGPL §4 compliance
+            FFmpeg is unmodified LGPL-2.1+ source. Upstream source at the pinned tag:
+            https://github.com/FFmpeg/FFmpeg/tree/${{ env.FFMPEG_REF }}
+            Configure flags are recorded in `BUILD-INFO.txt` inside the archive.
+          files: |
+            ${{ env.ARCHIVE_PATH }}
+            ${{ env.SUMS_PATH }}
+          fail_on_unmatched_files: true
+          token: ${{ secrets.GITHUB_TOKEN }}
