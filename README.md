@@ -42,10 +42,14 @@ components ExoSnap links and uses:
 | Parser: `av1` | built-in | Stream parameter parsing |
 | Parser: `aac` | built-in | Stream parameter parsing |
 | Parser: `opus` | built-in | Stream parameter parsing |
+| Parser: `vorbis` | built-in | Stream parameter parsing |
+| Parser: `mpegaudio` | built-in | Stream parameter parsing |
 | BSF: `aac_adtstoasc` | built-in | AAC framing for MP4 (avformat uses it internally) |
 | BSF: `extract_extradata` | built-in | Codec extradata extraction (avformat internal use) |
 | BSF: `h264_mp4toannexb` | built-in | H.264 format conversion (avformat internal use) |
 | BSF: `hevc_mp4toannexb` | built-in | HEVC format conversion (avformat internal use) |
+| BSF: `av1_metadata` | built-in | AV1 metadata handling (avformat internal use) |
+| BSF: `null` | built-in | No-op passthrough (avformat internal use) |
 
 Components explicitly **not** built: encoders, decoders, avfilter, avdevice, swscale, all programs
 (ffmpeg/ffprobe/ffplay), documentation, avresample.
