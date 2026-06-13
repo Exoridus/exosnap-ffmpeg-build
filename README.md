@@ -22,6 +22,7 @@ recorded inside the archive in `BUILD-INFO.txt` and in the release title.
 |-------------|---------------------|-------|
 | r1          | n8.1.1              | Initial controlled build; baseline parity with BtbN autobuild-2026-06-11 |
 | r2          | n8.1.1              | Adds `mp4` muxer; r1 omitted it so `avformat_alloc_output_context2("mp4", …)` returned AVERROR(EINVAL) |
+| r3          | n8.1.1              | Adds `mov` demuxer; r2 could write MP4 but `avformat_open_input` on the output failed (test verification + any read-back of MP4 files) |
 
 ## What is built
 
@@ -34,6 +35,7 @@ components ExoSnap links and uses:
 | `avcodec` | codec parameters | `avcodec_parameters_copy`; no decode/encode |
 | `avutil` | utility | Required by avformat and avcodec |
 | `swresample` | resampler | Linked as dependency of avformat |
+| Demuxer: `mov` | built-in to avformat | Input format for MP4/MOV files (required to read back written MP4) |
 | Demuxer: `matroska` | built-in to avformat | Input format for MKV remux |
 | Muxer: `mp4` | built-in to avformat | Output format for MP4 (required by `avformat_alloc_output_context2("mp4", …)`) |
 | Muxer: `mov` | built-in to avformat | Output format for MP4 faststart (shares movenc backend with mp4) |
