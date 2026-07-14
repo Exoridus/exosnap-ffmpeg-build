@@ -96,6 +96,9 @@ jobs:
       # though both share the movenc backend.
       # r3 adds --enable-demuxer=mov: reading back the generated MP4 in tests
       # (avformat_open_input on .mp4 output) requires the mov/mp4 demuxer.
+      # r3 -> r4: added --enable-decoder=* for h264/hevc/av1/opus/aac/flac/pcm_* --
+      # the Edit-page video player needs to decode every codec ExoSnap itself can
+      # produce. Previously avcodec carried zero decoders (mux/demux-only build).
       # -----------------------------------------------------------------------
       - name: Configure FFmpeg
         working-directory: ffmpeg-src
@@ -135,6 +138,16 @@ jobs:
             --enable-parser=opus
             --enable-parser=vorbis
             --enable-parser=mpegaudio
+            --enable-decoder=h264
+            --enable-decoder=hevc
+            --enable-decoder=av1
+            --enable-decoder=opus
+            --enable-decoder=aac
+            --enable-decoder=flac
+            --enable-decoder=pcm_s16le
+            --enable-decoder=pcm_s24le
+            --enable-decoder=pcm_s32le
+            --enable-decoder=pcm_f32le
             --enable-bsf=aac_adtstoasc
             --enable-bsf=extract_extradata
             --enable-bsf=h264_mp4toannexb
