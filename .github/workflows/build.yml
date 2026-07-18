@@ -88,6 +88,9 @@ jobs:
       #   Muxers:     mp4, mov (MP4 faststart), matroska (recovery MKV), webm
       #   Protocols:  file
       #   Parsers:    h264, hevc, av1, aac, opus, vorbis, mpegaudio
+      #   Decoders:   h264, hevc, av1, opus, aac, flac,
+      #               pcm_s16le, pcm_s24le, pcm_s32le, pcm_f32le
+      #   Encoders:   aac (AAC-LC — ExoSnap FfmpegAacEncoder, ADR 0052)
       #   BSFs:       aac_adtstoasc, extract_extradata,
       #               h264_mp4toannexb, hevc_mp4toannexb, av1_metadata, null
       #
@@ -99,6 +102,17 @@ jobs:
       # r3 -> r4: added --enable-decoder=* for h264/hevc/av1/opus/aac/flac/pcm_* --
       # the Edit-page video player needs to decode every codec ExoSnap itself can
       # produce. Previously avcodec carried zero decoders (mux/demux-only build).
+      # r4 -> r5: added --enable-encoder=aac. Through r4 the avcodec DLL carried
+      # zero *encoders* (--disable-everything drops them and no --enable-encoder
+      # was ever set), so avcodec_find_encoder(AV_CODEC_ID_AAC) returned NULL at
+      # runtime. ExoSnap is migrating its AAC path off the statically-linked
+      # FDK-AAC library (ADR 0043) onto FFmpeg's native AAC-LC encoder
+      # (FfmpegAacEncoder, ExoSnap ADR 0052), which needs this encoder compiled
+      # in. Deliberately NO --enable-muxer=adts: ExoSnap packages AAC as raw AAC
+      # access units plus AudioSpecificConfig extradata (A_AAC CodecPrivate in
+      # Matroska; codecpar extradata carried through the MP4 remux), never as an
+      # ADTS bitstream, so the encoder's default raw output already matches the
+      # container writers with no ADTS framing required.
       # -----------------------------------------------------------------------
       - name: Configure FFmpeg
         working-directory: ffmpeg-src
@@ -148,6 +162,7 @@ jobs:
             --enable-decoder=pcm_s24le
             --enable-decoder=pcm_s32le
             --enable-decoder=pcm_f32le
+            --enable-encoder=aac
             --enable-bsf=aac_adtstoasc
             --enable-bsf=extract_extradata
             --enable-bsf=h264_mp4toannexb
@@ -377,6 +392,8 @@ jobs:
             Muxers: `mp4`, `mov` (MP4 faststart), `matroska` (MKV), `webm`
             Protocols: `file`
             Parsers: `h264`, `hevc`, `av1`, `aac`, `opus`, `vorbis`, `mpegaudio`
+            Decoders: `h264`, `hevc`, `av1`, `opus`, `aac`, `flac`, `pcm_s16le`, `pcm_s24le`, `pcm_s32le`, `pcm_f32le`
+            Encoders: `aac` (AAC-LC — ExoSnap's native-AAC migration, ADR 0052)
             BSFs: `aac_adtstoasc`, `extract_extradata`, `h264_mp4toannexb`, `hevc_mp4toannexb`, `av1_metadata`, `null`
 
             ### SHA256
