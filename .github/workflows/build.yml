@@ -120,6 +120,19 @@ jobs:
           echo "X265_COMMIT=${X265_COMMIT}" >> "$GITHUB_ENV"
           echo "Cloned x265 default branch @ ${X265_COMMIT}"
 
+          # x265's source/CMakeLists.txt embeds a build-version string derived
+          # from `git describe --tags` (cmake/Version.cmake), gated on
+          # CMAKE_RC_COMPILER being set -- which CMake auto-populates for any
+          # Windows-GNU cross target regardless of the toolchain file, even
+          # though we never enable the RC language (ENABLE_CLI=OFF,
+          # ENABLE_SHARED=OFF mean nothing ever consumes the .rc resource).
+          # Our --depth=1 clone has no reachable tags, so `git describe --tags`
+          # returns empty and CMakeLists.txt's `list(GET VERSION_LIST 0/1 ...)`
+          # crashes with "list GET given empty list". Seed a lightweight tag at
+          # HEAD so `git describe --tags` has something to resolve; the tag
+          # name itself is never consumed by ExoSnap.
+          git -C x265-src tag v0.0
+
           cat > /tmp/toolchain-mingw64.cmake <<'EOF'
           set(CMAKE_SYSTEM_NAME Windows)
           set(CMAKE_SYSTEM_PROCESSOR x86_64)
