@@ -79,6 +79,34 @@ jobs:
           echo "Cloned FFmpeg commit: ${COMMIT}"
 
       # -----------------------------------------------------------------------
+      # 2b. Cross-compile libx264 (static) -- GPL-2.0-or-later, external to
+      # FFmpeg. x264 has no numbered release tags; pin by capturing the
+      # resolved commit on the `stable` branch (mirrors the FFMPEG_COMMIT
+      # capture above) so the build stays fully auditable without a version
+      # tag to point at.
+      # -----------------------------------------------------------------------
+      - name: Clone and cross-compile libx264
+        run: |
+          git clone --depth=1 --branch stable https://code.videolan.org/videolan/x264.git x264-src
+          X264_COMMIT=$(git -C x264-src rev-parse HEAD)
+          echo "X264_COMMIT=${X264_COMMIT}" >> "$GITHUB_ENV"
+          echo "Cloned x264 stable @ ${X264_COMMIT}"
+
+          cd x264-src
+          ./configure \
+            --host=x86_64-w64-mingw32 \
+            --cross-prefix=${CROSS_PREFIX} \
+            --prefix=/tmp/x264-install \
+            --enable-static \
+            --disable-cli \
+            --disable-opencl \
+            --enable-pic
+          make -j$(nproc)
+          make install
+          echo "--- libx264 install ---"
+          ls -la /tmp/x264-install/lib /tmp/x264-install/lib/pkgconfig
+
+      # -----------------------------------------------------------------------
       # 3. Configure — minimal LGPL shared, mux-only component whitelist
       #
       # Components included (derived from ExoSnap's mp4_remuxer.cpp and
@@ -113,8 +141,17 @@ jobs:
       # Matroska; codecpar extradata carried through the MP4 remux), never as an
       # ADTS bitstream, so the encoder's default raw output already matches the
       # container writers with no ADTS framing required.
+      # r5 -> r6: added --enable-gpl --enable-libx264 --enable-encoder=libx264
+      # (cross-compiled as a static lib in the step above). This moves the
+      # artifact's license from LGPL-2.1-or-later to GPL-2.0-or-later --
+      # confirmed acceptable (ExoSnap itself is GPL-3.0-or-later). No release
+      # ships an X264VideoEncoder yet (ADR 0007's license/patent audit gate
+      # is a separate, not-yet-done step) -- this only makes the capability
+      # available in the vendored binary.
       # -----------------------------------------------------------------------
       - name: Configure FFmpeg
+        env:
+          PKG_CONFIG_PATH: /tmp/x264-install/lib/pkgconfig
         working-directory: ffmpeg-src
         run: |
           CONFIGURE_FLAGS=(
@@ -163,6 +200,11 @@ jobs:
             --enable-decoder=pcm_s32le
             --enable-decoder=pcm_f32le
             --enable-encoder=aac
+            --enable-gpl
+            --enable-libx264
+            --enable-encoder=libx264
+            --extra-cflags="-I/tmp/x264-install/include"
+            --extra-ldflags="-L/tmp/x264-install/lib"
             --enable-bsf=aac_adtstoasc
             --enable-bsf=extract_extradata
             --enable-bsf=h264_mp4toannexb
