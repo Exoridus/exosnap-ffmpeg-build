@@ -54,6 +54,7 @@ jobs:
             nasm \
             yasm \
             pkg-config \
+            cmake \
             make \
             git \
             zip \
@@ -107,6 +108,48 @@ jobs:
           ls -la /tmp/x264-install/lib /tmp/x264-install/lib/pkgconfig
 
       # -----------------------------------------------------------------------
+      # 2c. Cross-compile libx265 (static, 8-bit only) -- GPL-2.0-or-later,
+      # external to FFmpeg. 10/12-bit ("main10"/"main12") multilib is
+      # deliberately not built -- ExoSnap has no current use for higher
+      # bit-depth software HEVC; extend later if that changes (YAGNI).
+      # -----------------------------------------------------------------------
+      - name: Clone and cross-compile libx265
+        run: |
+          git clone --depth=1 https://code.videolan.org/videolan/x265.git x265-src
+          X265_COMMIT=$(git -C x265-src rev-parse HEAD)
+          echo "X265_COMMIT=${X265_COMMIT}" >> "$GITHUB_ENV"
+          echo "Cloned x265 default branch @ ${X265_COMMIT}"
+
+          cat > /tmp/toolchain-mingw64.cmake <<'EOF'
+          set(CMAKE_SYSTEM_NAME Windows)
+          set(CMAKE_SYSTEM_PROCESSOR x86_64)
+          set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
+          set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
+          set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          EOF
+
+          mkdir x265-src/build
+          cd x265-src/build
+          cmake ../source \
+            -G "Unix Makefiles" \
+            -DCMAKE_TOOLCHAIN_FILE=/tmp/toolchain-mingw64.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/tmp/x265-install \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=OFF \
+            -DENABLE_LIBNUMA=OFF \
+            -DHIGH_BIT_DEPTH=OFF \
+            -DMAIN12=OFF \
+            -DENABLE_ASSEMBLY=ON
+          make -j$(nproc)
+          make install
+          echo "--- libx265 install ---"
+          ls -la /tmp/x265-install/lib /tmp/x265-install/lib/pkgconfig
+
+      # -----------------------------------------------------------------------
       # 3. Configure — minimal LGPL shared, mux-only component whitelist
       #
       # Components included (derived from ExoSnap's mp4_remuxer.cpp and
@@ -157,10 +200,13 @@ jobs:
       # "ERROR: x264 not found using pkg-config" even though PKG_CONFIG_PATH
       # and x264.pc are both correct -- force the native, non-prefixed
       # pkg-config, which honors PKG_CONFIG_PATH fine on its own.
+      # Also added --enable-libx265 --enable-encoder=libx265 (cross-compiled,
+      # 8-bit only) in the same pass, plus -lstdc++ in --extra-libs since x265
+      # is C++ and its static archive is linked into avcodec's C link step.
       # -----------------------------------------------------------------------
       - name: Configure FFmpeg
         env:
-          PKG_CONFIG_PATH: /tmp/x264-install/lib/pkgconfig
+          PKG_CONFIG_PATH: /tmp/x264-install/lib/pkgconfig:/tmp/x265-install/lib/pkgconfig
         working-directory: ffmpeg-src
         run: |
           CONFIGURE_FLAGS=(
@@ -213,8 +259,11 @@ jobs:
             --enable-gpl
             --enable-libx264
             --enable-encoder=libx264
-            --extra-cflags="-I/tmp/x264-install/include"
-            --extra-ldflags="-L/tmp/x264-install/lib"
+            --enable-libx265
+            --enable-encoder=libx265
+            --extra-cflags="-I/tmp/x264-install/include -I/tmp/x265-install/include"
+            --extra-ldflags="-L/tmp/x264-install/lib -L/tmp/x265-install/lib"
+            --extra-libs="-lstdc++"
             --enable-bsf=aac_adtstoasc
             --enable-bsf=extract_extradata
             --enable-bsf=h264_mp4toannexb
@@ -379,6 +428,7 @@ jobs:
             printf 'FFmpeg upstream ref:  %s\n' "${FFMPEG_REF}"
             printf 'FFmpeg commit:        %s\n' "${FFMPEG_COMMIT}"
             printf 'x264 commit:          %s\n' "${X264_COMMIT}"
+            printf 'x265 commit:          %s\n' "${X265_COMMIT}"
             printf 'Build date:           %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             printf 'Target:               x86_64-w64-mingw32 (Windows x86-64)\n'
             printf 'Build host:           %s\n' "$(uname -srm)"
