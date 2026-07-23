@@ -36,7 +36,7 @@ components ExoSnap links and uses:
 | Component | Type | Reason included |
 |-----------|------|-----------------|
 | `avformat` | muxer + demuxer | Container I/O — MP4 (mov), Matroska (mkv/webm) |
-| `avcodec` | codec parameters | `avcodec_parameters_copy`; no decode/encode |
+| `avcodec` | codec plumbing | `avcodec_parameters_copy`; also carries built-in decoders/encoders listed below (since r4–r6) |
 | `avutil` | utility | Required by avformat and avcodec |
 | `swresample` | resampler | Linked as dependency of avformat |
 | Demuxer: `mov` | built-in to avformat | Input format for MP4/MOV files (required to read back written MP4) |
