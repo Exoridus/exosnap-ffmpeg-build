@@ -131,9 +131,9 @@ jobs:
           set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
           EOF
 
-          mkdir x265-src/build
-          cd x265-src/build
-          cmake ../source \
+          mkdir x265-cmake-build
+          cd x265-cmake-build
+          cmake ../x265-src/source \
             -G "Unix Makefiles" \
             -DCMAKE_TOOLCHAIN_FILE=/tmp/toolchain-mingw64.cmake \
             -DCMAKE_BUILD_TYPE=Release \
