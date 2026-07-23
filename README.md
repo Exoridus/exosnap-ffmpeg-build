@@ -1,7 +1,20 @@
 # exosnap-ffmpeg-build
 
-Pinned, minimal FFmpeg builds for [ExoSnap](https://github.com/Exoridus/exosnap). GPL-2.0-or-later
-since r6 (libx264/libx265); r1-r5 were LGPL-2.1-or-later only.
+Pinned, minimal FFmpeg builds for [ExoSnap](https://github.com/Exoridus/exosnap). r1-r5 are
+LGPL-2.1-or-later only; r6 added `--enable-gpl` + libx264/libx265 (GPL-2.0-or-later).
+
+## Current ExoSnap pin: r5 (not r6)
+
+**ExoSnap's `cmake/VendorFFmpeg.cmake` currently pins r5**, not the latest tag. r6 was built
+(2026-07-23) as a feasibility proof that this pipeline could cross-compile libx264/libx265, then
+reverted the same day on the ExoSnap side after a patent-licensing risk review: shipping a
+compiled software H.264/HEVC encoder makes ExoSnap the patent-pool "product manufacturer" of
+record, with no legal budget to clear that. See ExoSnap's `docs/decisions/0007-software-encoding-via-x264.md`
+("2026-07-23 revision") for the full reasoning. The `r6` tag remains published here (immutable
+release tags are never deleted/modified) and this README's build-content tables below still
+describe it accurately as a historical release — it is simply not what ExoSnap consumes today. Any
+future software-encoder work in ExoSnap is planned as runtime detection of a user-supplied,
+independently-sourced FFmpeg build, not as a bundled dependency of this repository.
 
 ## Purpose
 
