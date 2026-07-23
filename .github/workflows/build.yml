@@ -378,6 +378,7 @@ jobs:
           {
             printf 'FFmpeg upstream ref:  %s\n' "${FFMPEG_REF}"
             printf 'FFmpeg commit:        %s\n' "${FFMPEG_COMMIT}"
+            printf 'x264 commit:          %s\n' "${X264_COMMIT}"
             printf 'Build date:           %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             printf 'Target:               x86_64-w64-mingw32 (Windows x86-64)\n'
             printf 'Build host:           %s\n' "$(uname -srm)"
