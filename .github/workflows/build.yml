@@ -115,7 +115,7 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Clone and cross-compile libx265
         run: |
-          git clone --depth=1 https://code.videolan.org/videolan/x265.git x265-src
+          git clone --depth=1 https://github.com/videolan/x265.git x265-src
           X265_COMMIT=$(git -C x265-src rev-parse HEAD)
           echo "X265_COMMIT=${X265_COMMIT}" >> "$GITHUB_ENV"
           echo "Cloned x265 default branch @ ${X265_COMMIT}"
