@@ -27,7 +27,7 @@ env:
   CROSS_PREFIX: x86_64-w64-mingw32-
 
   # Archive stem name (version is embedded inside the archive directory)
-  ARCHIVE_STEM: ffmpeg-win64-lgpl-shared
+  ARCHIVE_STEM: ffmpeg-win64-gpl-shared
 
   # Installation prefix inside the build tree
   INSTALL_PREFIX: /tmp/ffmpeg-install
@@ -394,7 +394,7 @@ jobs:
       - name: Assemble release archive
         run: |
           STAGING="/tmp/ffmpeg-staging"
-          ARCHIVE_DIR="${STAGING}/ffmpeg-${FFMPEG_REF}-win64-lgpl-shared"
+          ARCHIVE_DIR="${STAGING}/ffmpeg-${FFMPEG_REF}-win64-gpl-shared"
           mkdir -p "${ARCHIVE_DIR}/bin" "${ARCHIVE_DIR}/include" "${ARCHIVE_DIR}/lib"
 
           # DLLs — mux-only set (avformat, avcodec, avutil, swresample)
@@ -431,8 +431,12 @@ jobs:
             fi
           done
 
-          # FFmpeg LGPL license
-          cp ffmpeg-src/COPYING.LGPLv2.1 "${ARCHIVE_DIR}/LICENSE.md"
+          # FFmpeg GPL license (--enable-gpl, no --enable-version3 -> GPLv2-or-later)
+          cp ffmpeg-src/COPYING.GPLv2 "${ARCHIVE_DIR}/LICENSE.md"
+          # x264/x265 are statically linked into avcodec now; bundle their own
+          # license texts alongside FFmpeg's.
+          cp x264-src/COPYING "${ARCHIVE_DIR}/LICENSE-x264.md"
+          cp x265-src/COPYING "${ARCHIVE_DIR}/LICENSE-x265.md"
 
           # Build metadata
           TOOLCHAIN_VER=$(x86_64-w64-mingw32-gcc --version | head -1)
@@ -447,7 +451,7 @@ jobs:
             printf 'Build host:           %s\n' "$(uname -srm)"
             printf 'Toolchain:            %s\n' "${TOOLCHAIN_VER}"
             printf 'Configure command:    %s\n' "${CONFIGURE_CMD}"
-            printf 'Build type:           LGPL-2.1+ shared, --disable-everything whitelist\n'
+            printf 'Build type:           GPL-2.0-or-later shared, --disable-everything whitelist\n'
             printf 'Produced by:          https://github.com/Exoridus/exosnap-ffmpeg-build\n'
           } > "${ARCHIVE_DIR}/BUILD-INFO.txt"
 
@@ -457,7 +461,7 @@ jobs:
           # Create ZIP
           ARCHIVE_NAME="${ARCHIVE_STEM}.zip"
           cd "${STAGING}"
-          zip -r "/tmp/${ARCHIVE_NAME}" "ffmpeg-${FFMPEG_REF}-win64-lgpl-shared/"
+          zip -r "/tmp/${ARCHIVE_NAME}" "ffmpeg-${FFMPEG_REF}-win64-gpl-shared/"
           echo "ARCHIVE_PATH=/tmp/${ARCHIVE_NAME}" >> "$GITHUB_ENV"
           echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> "$GITHUB_ENV"
 
@@ -496,10 +500,12 @@ jobs:
         with:
           name: "FFmpeg ${{ env.FFMPEG_REF }} (${{ github.ref_name }})"
           body: |
-            ## FFmpeg ${{ env.FFMPEG_REF }} — minimal LGPL shared build for ExoSnap
+            ## FFmpeg ${{ env.FFMPEG_REF }} — minimal GPL shared build for ExoSnap
 
             **Upstream commit:** `${{ env.FFMPEG_COMMIT }}`
-            **Build type:** LGPL-2.1+ shared (no GPL, no nonfree, `--disable-everything` whitelist)
+            **x264 commit:** `${{ env.X264_COMMIT }}`
+            **x265 commit:** `${{ env.X265_COMMIT }}`
+            **Build type:** GPL-2.0-or-later shared (`--enable-gpl`, no `--enable-version3`; no nonfree; `--disable-everything` whitelist otherwise)
             **Target:** Windows x86-64 (mingw-w64 cross build on ubuntu-latest)
 
             ### Components included
@@ -509,7 +515,7 @@ jobs:
             Protocols: `file`
             Parsers: `h264`, `hevc`, `av1`, `aac`, `opus`, `vorbis`, `mpegaudio`
             Decoders: `h264`, `hevc`, `av1`, `opus`, `aac`, `flac`, `pcm_s16le`, `pcm_s24le`, `pcm_s32le`, `pcm_f32le`
-            Encoders: `aac` (AAC-LC — ExoSnap's native-AAC migration, ADR 0052)
+            Encoders: `aac` (AAC-LC — ExoSnap's native-AAC migration, ADR 0052), `libx264`, `libx265` (software H.264/HEVC; not yet wired into any ExoSnap encoder backend — see ADR 0007)
             BSFs: `aac_adtstoasc`, `extract_extradata`, `h264_mp4toannexb`, `hevc_mp4toannexb`, `av1_metadata`, `null`
 
             ### SHA256
@@ -528,9 +534,12 @@ jobs:
             )
             ```
 
-            ### LGPL §4 compliance
+            ### GPL compliance
+
             FFmpeg source at pinned tag: https://github.com/FFmpeg/FFmpeg/tree/${{ env.FFMPEG_REF }}
-            Configure flags are in `BUILD-INFO.txt` inside the archive. No patches applied.
+            x264 source at pinned commit: https://code.videolan.org/videolan/x264/-/commit/${{ env.X264_COMMIT }}
+            x265 source at pinned commit: https://code.videolan.org/videolan/x265/-/commit/${{ env.X265_COMMIT }}
+            Configure flags are in `BUILD-INFO.txt` inside the archive. No patches applied to any of the three.
           files: |
             ${{ env.ARCHIVE_PATH }}
             ${{ env.SUMS_PATH }}
