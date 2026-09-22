@@ -448,16 +448,22 @@ jobs:
             echo "ERROR: the configure line enables gpl or nonfree; this profile is lgpl-shared" >&2
             exit 1
           fi
-          if [ -f ffmpeg-src/ffbuild/config.h ]; then
-            grep -qx '#define CONFIG_GPL 0' ffmpeg-src/ffbuild/config.h || {
-              echo "ERROR: ffbuild/config.h does not report CONFIG_GPL 0" >&2; exit 1; }
-            grep -qx '#define CONFIG_NONFREE 0' ffmpeg-src/ffbuild/config.h || {
-              echo "ERROR: ffbuild/config.h does not report CONFIG_NONFREE 0" >&2; exit 1; }
-            echo "Profile self-check: CONFIG_GPL 0, CONFIG_NONFREE 0"
-          else
-            echo "ERROR: ffmpeg-src/ffbuild/config.h is missing; the profile cannot be verified" >&2
+          # configure writes config.h at the source root, not under ffbuild/,
+          # and the location has moved between FFmpeg generations. Find it
+          # rather than hard code a path. A missing file stays fatal: a check
+          # that cannot find its own input proves nothing, and the n9.0.2
+          # dispatch failed here for exactly that reason before this was fixed.
+          CONFIG_H=$(find ffmpeg-src -maxdepth 2 -name config.h -print -quit)
+          if [ -z "${CONFIG_H}" ]; then
+            echo "ERROR: configure's config.h was not found under ffmpeg-src; the profile cannot be verified" >&2
             exit 1
           fi
+          echo "Profile self-check reads ${CONFIG_H}"
+          grep -qx '#define CONFIG_GPL 0' "${CONFIG_H}" || {
+            echo "ERROR: ${CONFIG_H} does not report CONFIG_GPL 0" >&2; exit 1; }
+          grep -qx '#define CONFIG_NONFREE 0' "${CONFIG_H}" || {
+            echo "ERROR: ${CONFIG_H} does not report CONFIG_NONFREE 0" >&2; exit 1; }
+          echo "Profile self-check: CONFIG_GPL 0, CONFIG_NONFREE 0"
 
           # Build metadata. JSON rather than prose: the consumer reads this to
           # verify the package it downloaded is the package it pinned, and CMake
