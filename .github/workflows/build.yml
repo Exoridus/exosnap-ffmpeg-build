@@ -1,45 +1,112 @@
 name: Build FFmpeg
 
-# Trigger: manually via workflow_dispatch (choose any ffmpeg_ref),
-# or automatically on r* tag pushes (uses the default ref).
+# Trigger: manually via workflow_dispatch, or automatically on a package tag.
+#
+# A package tag is `n<upstream>-exosnap.<revision>`, for example
+# `n9.0.2-exosnap.1`. It answers exactly two questions: which upstream ref was
+# built, and which revision of our recipe built it. A revision only increases
+# when the recipe changes while the upstream ref stays put.
+#
+# The profile is deliberately NOT in the tag. Whether the artifact is LGPL-only
+# is a fact to verify in the archive (BUILD-INFO.json, plus the self-check in
+# the assemble step), not a string to trust in a file name.
+#
+# `r*` stays in the trigger so the seven historical tags keep resolving, but a
+# push of one is refused: an r-tag carries no upstream version, so this workflow
+# cannot know what it would have to build.
 on:
   workflow_dispatch:
     inputs:
-      ffmpeg_ref:
+      upstream_ref:
         description: >
           FFmpeg upstream git ref to build (branch, tag, or commit SHA).
-          Example: n8.1.1
+          Example: n9.0.2
+        required: true
+        default: "n9.0.2"
+      package_revision:
+        description: >
+          Our package revision for that upstream ref. Starts at 1, and only
+          increases when the recipe changes while the upstream ref does not.
         required: false
-        default: "n8.1.1"
+        default: "1"
   push:
     tags:
+      - "n*-exosnap.*"
       - "r*"
 
 # ---------------------------------------------------------------------------
 # Derived values shared across steps
 # ---------------------------------------------------------------------------
+# FFMPEG_REF, PACKAGE_TAG, PACKAGE_REVISION and ARCHIVE_STEM are resolved by the
+# identity step below, from the tag or the dispatch inputs. Nothing here hard
+# codes an upstream version: the previous default made a tag push silently build
+# `n8.1.1` whatever the tag said.
 env:
-  # Canonical upstream ref: prefer the workflow_dispatch input; fall back to
-  # the default when triggered by a tag push.
-  FFMPEG_REF: ${{ github.event.inputs.ffmpeg_ref || 'n8.1.1' }}
-
   # Cross-compilation prefix
   CROSS_PREFIX: x86_64-w64-mingw32-
-
-  # Archive stem name (version is embedded inside the archive directory)
-  ARCHIVE_STEM: ffmpeg-win64-lgpl-shared
 
   # Installation prefix inside the build tree
   INSTALL_PREFIX: /tmp/ffmpeg-install
 
 jobs:
   build:
-    name: Build FFmpeg ${{ github.event.inputs.ffmpeg_ref || 'n8.1.1' }} (mingw-w64 cross)
+    name: Build FFmpeg (mingw-w64 cross)
     runs-on: ubuntu-latest
     permissions:
       contents: write   # needed to create releases
 
     steps:
+      # -----------------------------------------------------------------------
+      # 0. Resolve the package identity before anything is built
+      # -----------------------------------------------------------------------
+      # Everything downstream reads FFMPEG_REF, so the tag is the single place
+      # the upstream version comes from on a tag build. A tag that does not say
+      # what it builds fails here, before a toolchain is installed.
+      - name: Resolve package identity
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+            case "${TAG}" in
+              n*-exosnap.*)
+                UPSTREAM_REF="${TAG%%-exosnap.*}"
+                PACKAGE_REVISION="${TAG##*-exosnap.}"
+                ;;
+              r*)
+                echo "::error::'${TAG}' is a legacy r-tag. It carries no upstream version, so this workflow cannot know what to build. r1 through r7 stay published exactly as they are; a new build uses n<upstream>-exosnap.<revision>, for example n9.0.2-exosnap.1."
+                exit 1
+                ;;
+              *)
+                echo "::error::tag '${TAG}' does not match n<upstream>-exosnap.<revision>."
+                exit 1
+                ;;
+            esac
+            PACKAGE_TAG="${TAG}"
+          else
+            UPSTREAM_REF='${{ inputs.upstream_ref }}'
+            PACKAGE_REVISION='${{ inputs.package_revision }}'
+            PACKAGE_TAG="${UPSTREAM_REF}-exosnap.${PACKAGE_REVISION}"
+          fi
+
+          case "${PACKAGE_REVISION}" in
+            ''|*[!0-9]*)
+              echo "::error::package revision '${PACKAGE_REVISION}' is not a number."
+              exit 1
+              ;;
+          esac
+
+          {
+            echo "FFMPEG_REF=${UPSTREAM_REF}"
+            echo "PACKAGE_TAG=${PACKAGE_TAG}"
+            echo "PACKAGE_REVISION=${PACKAGE_REVISION}"
+            echo "ARCHIVE_STEM=ffmpeg-${UPSTREAM_REF}-win64-lgpl-shared"
+          } >> "$GITHUB_ENV"
+
+          echo "package tag:      ${PACKAGE_TAG}"
+          echo "upstream ref:     ${UPSTREAM_REF}"
+          echo "package revision: ${PACKAGE_REVISION}"
+
       # -----------------------------------------------------------------------
       # 1. Install cross toolchain and build tools
       # -----------------------------------------------------------------------
@@ -213,10 +280,10 @@ jobs:
             --enable-optimizations
           )
 
-          # Log the configure line for auditing (single line for BUILD-INFO.txt)
+          # Log the configure line for auditing (single line for BUILD-INFO.json)
           CONFIGURE_LINE="./configure ${CONFIGURE_FLAGS[*]}"
           echo "Running: ${CONFIGURE_LINE}"
-          # Store for BUILD-INFO.txt (escape newlines)
+          # Store for BUILD-INFO.json (escape newlines)
           printf '%s' "${CONFIGURE_LINE}" > /tmp/configure_cmd.txt
 
           ./configure "${CONFIGURE_FLAGS[@]}"
@@ -320,11 +387,28 @@ jobs:
           mkdir -p "${ARCHIVE_DIR}/bin" "${ARCHIVE_DIR}/include" "${ARCHIVE_DIR}/lib"
 
           # DLLs — mux-only set (avformat, avcodec, avutil, swresample)
+          #
+          # The soname major of each library is read off the file that was
+          # actually produced, never declared, so BUILD-INFO.json cannot claim a
+          # major the archive does not carry. The consumer pins these four
+          # numbers and refuses to configure when they move (ExoSnap
+          # cmake/VendorFFmpeg.cmake), which is what turns an upstream major
+          # bump into a named error instead of a link failure.
+          LIB_MAJORS=""
           for LIB in avformat avcodec avutil swresample; do
             DLL=$(ls "${INSTALL_PREFIX}/bin/${LIB}"-*.dll 2>/dev/null | head -1)
             if [ -n "${DLL}" ]; then
               cp "${DLL}" "${ARCHIVE_DIR}/bin/"
-              echo "Copied DLL: $(basename "${DLL}")"
+              BASE=$(basename "${DLL}" .dll)
+              MAJOR="${BASE##*-}"
+              case "${MAJOR}" in
+                ''|*[!0-9]*)
+                  echo "ERROR: cannot read a soname major from $(basename "${DLL}")" >&2
+                  exit 1
+                  ;;
+              esac
+              LIB_MAJORS="${LIB_MAJORS}${LIB_MAJORS:+,}\"${LIB}\":${MAJOR}"
+              echo "Copied DLL: $(basename "${DLL}") (major ${MAJOR})"
             else
               echo "ERROR: DLL not found for ${LIB}" >&2
               exit 1
@@ -356,20 +440,61 @@ jobs:
           # FFmpeg LGPL license
           cp ffmpeg-src/COPYING.LGPLv2.1 "${ARCHIVE_DIR}/LICENSE.md"
 
-          # Build metadata
+          # Profile self-check, two-sided: what we asked configure for, and what
+          # configure says it did. A GPL or nonfree build reaching an archive
+          # labelled lgpl-shared is the one failure this repository has already
+          # had once, when the default branch quietly carried the r6 recipe.
+          if grep -qE -- '--enable-(gpl|nonfree)' /tmp/configure_cmd.txt; then
+            echo "ERROR: the configure line enables gpl or nonfree; this profile is lgpl-shared" >&2
+            exit 1
+          fi
+          if [ -f ffmpeg-src/ffbuild/config.h ]; then
+            grep -qx '#define CONFIG_GPL 0' ffmpeg-src/ffbuild/config.h || {
+              echo "ERROR: ffbuild/config.h does not report CONFIG_GPL 0" >&2; exit 1; }
+            grep -qx '#define CONFIG_NONFREE 0' ffmpeg-src/ffbuild/config.h || {
+              echo "ERROR: ffbuild/config.h does not report CONFIG_NONFREE 0" >&2; exit 1; }
+            echo "Profile self-check: CONFIG_GPL 0, CONFIG_NONFREE 0"
+          else
+            echo "ERROR: ffmpeg-src/ffbuild/config.h is missing; the profile cannot be verified" >&2
+            exit 1
+          fi
+
+          # Build metadata. JSON rather than prose: the consumer reads this to
+          # verify the package it downloaded is the package it pinned, and CMake
+          # parses JSON natively from 3.19 on, so no regex over a human-readable
+          # file has to stay in step with its wording.
           TOOLCHAIN_VER=$(x86_64-w64-mingw32-gcc --version | head -1)
           CONFIGURE_CMD=$(cat /tmp/configure_cmd.txt)
-          {
-            printf 'FFmpeg upstream ref:  %s\n' "${FFMPEG_REF}"
-            printf 'FFmpeg commit:        %s\n' "${FFMPEG_COMMIT}"
-            printf 'Build date:           %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            printf 'Target:               x86_64-w64-mingw32 (Windows x86-64)\n'
-            printf 'Build host:           %s\n' "$(uname -srm)"
-            printf 'Toolchain:            %s\n' "${TOOLCHAIN_VER}"
-            printf 'Configure command:    %s\n' "${CONFIGURE_CMD}"
-            printf 'Build type:           LGPL-2.1+ shared, --disable-everything whitelist\n'
-            printf 'Produced by:          https://github.com/Exoridus/exosnap-ffmpeg-build\n'
-          } > "${ARCHIVE_DIR}/BUILD-INFO.txt"
+          jq -n \
+            --arg packageTag "${PACKAGE_TAG}" \
+            --arg upstreamTag "${FFMPEG_REF}" \
+            --arg upstreamCommit "${FFMPEG_COMMIT}" \
+            --argjson packageRevision "${PACKAGE_REVISION}" \
+            --arg buildDate "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg buildHost "$(uname -srm)" \
+            --arg toolchain "${TOOLCHAIN_VER}" \
+            --arg configure "${CONFIGURE_CMD}" \
+            --argjson libraries "{${LIB_MAJORS}}" \
+            '{
+              schema: 1,
+              packageTag: $packageTag,
+              upstreamTag: $upstreamTag,
+              upstreamCommit: $upstreamCommit,
+              packageRevision: $packageRevision,
+              profile: "lgpl-shared",
+              architecture: "win64",
+              linkage: "shared",
+              libraries: $libraries,
+              target: "x86_64-w64-mingw32",
+              buildDate: $buildDate,
+              buildHost: $buildHost,
+              toolchain: $toolchain,
+              configure: $configure,
+              producedBy: "https://github.com/Exoridus/exosnap-ffmpeg-build"
+            }' > "${ARCHIVE_DIR}/BUILD-INFO.json"
+
+          echo "--- BUILD-INFO.json ---"
+          cat "${ARCHIVE_DIR}/BUILD-INFO.json"
 
           echo "--- Archive directory contents ---"
           find "${ARCHIVE_DIR}" -type f | sort
@@ -401,26 +526,29 @@ jobs:
       - name: Upload archive artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ARCHIVE_STEM }}-${{ env.FFMPEG_REF }}
+          name: ${{ env.PACKAGE_TAG }}
           path: |
             ${{ env.ARCHIVE_PATH }}
             ${{ env.SUMS_PATH }}
           retention-days: 30
 
       # -----------------------------------------------------------------------
-      # 10. Create GitHub Release (only on r* tag pushes)
+      # 10. Create GitHub Release (only on a package tag push)
       # -----------------------------------------------------------------------
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/r')
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          name: "FFmpeg ${{ env.FFMPEG_REF }} (${{ github.ref_name }})"
+          name: "FFmpeg ${{ env.FFMPEG_REF }} for ExoSnap · LGPL shared · build ${{ env.PACKAGE_REVISION }}"
           body: |
             ## FFmpeg ${{ env.FFMPEG_REF }} — minimal LGPL shared build for ExoSnap
 
+            **Package tag:** `${{ env.PACKAGE_TAG }}`
             **Upstream commit:** `${{ env.FFMPEG_COMMIT }}`
             **Build type:** LGPL-2.1+ shared (no GPL, no nonfree, `--disable-everything` whitelist)
             **Target:** Windows x86-64 (mingw-w64 cross build on ubuntu-latest)
+
+            The archive carries `BUILD-INFO.json`, which states the package tag, the upstream tag and commit, the profile, and the soname major of each library as built. A consumer verifies against that file rather than trusting this text.
 
             ### Components included
             Libraries: `avformat`, `avcodec`, `avutil`, `swresample`
@@ -451,7 +579,7 @@ jobs:
 
             ### LGPL §4 compliance
             FFmpeg source at pinned tag: https://github.com/FFmpeg/FFmpeg/tree/${{ env.FFMPEG_REF }}
-            Configure flags are in `BUILD-INFO.txt` inside the archive. No patches applied.
+            Configure flags are in `BUILD-INFO.json` inside the archive. No patches applied.
           files: |
             ${{ env.ARCHIVE_PATH }}
             ${{ env.SUMS_PATH }}
