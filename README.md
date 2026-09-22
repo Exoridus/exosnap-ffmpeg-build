@@ -41,8 +41,35 @@ auditable.
 
 ## Versioning scheme
 
-Release tags follow the pattern `r<N>` (e.g. `r1`, `r2`). The FFmpeg upstream tag being built is
-recorded inside the archive in `BUILD-INFO.txt` and in the release title.
+A release tag is `n<upstream>-exosnap.<revision>`, for example `n9.0.2-exosnap.1`. It answers two
+questions and no others: which upstream ref was built, and which revision of our recipe built it.
+The revision starts at 1 for each upstream ref and only increases when the recipe changes while the
+upstream ref stays put.
+
+| what changed | next tag after `n9.0.2-exosnap.1` |
+|---|---|
+| the recipe, same upstream | `n9.0.2-exosnap.2` |
+| an upstream patch release | `n9.0.3-exosnap.1` |
+| an upstream minor or major | `n9.1-exosnap.1`, `n10.0-exosnap.1` |
+
+`upstreamTag` is written exactly as upstream writes it, so a series upstream tags `n9.1` is not
+padded to `n9.1.0`.
+
+**The profile is deliberately not in the tag.** Whether a package is LGPL-only is a fact to verify
+in the archive, not a string to trust in a file name. `BUILD-INFO.json` states it, the build
+self-checks it before packaging, and the consumer refuses a mismatch. A tag can only ever be a
+claim.
+
+The tag is also the only place the upstream version comes from on a tag build. Before this scheme
+the workflow fell back to a hard-coded `n8.1.1` on any tag push, so a tag and the bytes it named
+could disagree without anything noticing.
+
+### Historical releases
+
+`r1` through `r7` stay published exactly as they are. Nothing about them is renamed, rewritten or
+deleted. The workflow still accepts an `r*` tag in its trigger so those references keep resolving,
+but pushing one now fails with an explanation: an r-tag carries no upstream version, so the workflow
+cannot know what it would have to build.
 
 | Release tag | FFmpeg upstream ref | License | Notes |
 |-------------|---------------------|---------|-------|
@@ -111,10 +138,42 @@ ffmpeg-<ref>-win64-lgpl-shared/
     avutil.lib
     swresample.lib
   LICENSE.md           # FFmpeg LGPL-2.1-or-later license
-  BUILD-INFO.txt       # upstream commit, configure line, toolchain versions
+  BUILD-INFO.json      # the machine-readable identity of this package
 ```
 
-The archive is a ZIP. A `SHA256SUMS.txt` file accompanies each release.
+The archive is a ZIP named `ffmpeg-<upstream>-win64-lgpl-shared.zip`, so two releases no longer
+produce identically named downloads. A `SHA256SUMS.txt` file accompanies each release.
+
+`BUILD-INFO.json` is what a consumer verifies against:
+
+```json
+{
+  "schema": 1,
+  "packageTag": "n9.0.2-exosnap.1",
+  "upstreamTag": "n9.0.2",
+  "upstreamCommit": "...",
+  "packageRevision": 1,
+  "profile": "lgpl-shared",
+  "architecture": "win64",
+  "linkage": "shared",
+  "libraries": { "avformat": 63, "avcodec": 63, "avutil": 61, "swresample": 7 },
+  "target": "x86_64-w64-mingw32",
+  "buildDate": "...",
+  "buildHost": "...",
+  "toolchain": "...",
+  "configure": "...",
+  "producedBy": "https://github.com/Exoridus/exosnap-ffmpeg-build"
+}
+```
+
+The library majors are read off the DLLs that were actually produced, never declared, so the file
+cannot claim a major the archive does not carry. That is what lets a consumer pin the four numbers
+and fail its configure with a named error when an upstream major moves, instead of discovering it at
+link time or at runtime.
+
+The `profile` field is backed by a self-check that runs before packaging: the configure line must
+not enable `gpl` or `nonfree`, and FFmpeg's own `ffbuild/config.h` must report `CONFIG_GPL 0` and
+`CONFIG_NONFREE 0`. Both sides are checked, what was asked for and what the build says it did.
 
 The r6 archive is the one exception to that layout: its directory is named `win64-gpl-shared` and it
 carries `LICENSE-x264.md` and `LICENSE-x265.md` next to a GPL `LICENSE.md`.
@@ -123,19 +182,23 @@ carries `LICENSE-x264.md` and `LICENSE-x265.md` next to a GPL `LICENSE.md`.
 
 ### Manual (workflow_dispatch)
 
+A dispatch builds and uploads a workflow artifact, and publishes no release.
+
 ```
 gh workflow run build.yml \
   --repo Exoridus/exosnap-ffmpeg-build \
-  --field ffmpeg_ref=n8.1.1
+  --field upstream_ref=n9.0.2 \
+  --field package_revision=1
 ```
 
 ### Tag push (automated release)
 
 ```
-git tag r8 && git push origin r8
+git tag n9.0.2-exosnap.1 && git push origin n9.0.2-exosnap.1
 ```
 
-The workflow runs automatically, builds, and creates a GitHub Release with the archive attached.
+The workflow runs automatically, builds, and creates a GitHub Release with the archive attached. A
+tag that does not match the scheme fails in the first step, before a toolchain is installed.
 
 ## How ExoSnap consumes the artifacts
 
@@ -147,7 +210,7 @@ The artifact this branch produces is LGPL-2.1-or-later. ExoSnap is GPL-3.0-or-la
 DLLs dynamically, so the obligations that matter are the LGPL §4 ones:
 
 - **Unmodified upstream**: FFmpeg is built from unmodified upstream source at the pinned tag. No
-  patches are applied. `BUILD-INFO.txt` records the exact commit and the full configure line.
+  patches are applied. `BUILD-INFO.json` records the exact commit and the full configure line.
 - **Source offer**: FFmpeg source at the pinned tag, https://github.com/FFmpeg/FFmpeg.
 - **License shipped**: `LICENSE.md` is included in every artifact archive.
 - **Relinkable**: the libraries ship as DLLs with their import libraries, so a recipient can replace
